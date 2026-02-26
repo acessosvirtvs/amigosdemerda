@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Amigos de Merda",
+    "slug": "amigos-de-merda",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "O app precisa de acesso à câmera para tirar fotos dos jogadores.",
+        "NSPhotoLibraryUsageDescription": "O app precisa de acesso à galeria para selecionar fotos dos jogadores."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "VIBRATE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O app precisa de acesso à galeria para selecionar fotos dos jogadores.",
+          "cameraPermission": "O app precisa de acesso à câmera para tirar fotos dos jogadores."
+        }
+      ]
+    ]
+  }
+}
