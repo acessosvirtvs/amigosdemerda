@@ -1,5 +1,14 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useReducer,
+  useEffect,
+  useCallback,
+  useRef,
+  ReactNode,
+} from 'react';
 import { CARD_BANK, generateNewCard } from '../data/cards';
+import { syncService, SyncGameState } from '../services/syncService';
 
 export interface Player {
   id: string;
@@ -14,9 +23,13 @@ interface GameState {
   usedCards: Set<string>;
   availableCards: string[];
   currentCard: string | null;
-  votes: Record<string, string>; // voterId -> votedForId
+  votes: Record<string, string>;
   gameStarted: boolean;
   roundComplete: boolean;
+  // Sync-related
+  roomCode: string | null;
+  isHost: boolean;
+  syncEnabled: boolean;
 }
 
 type GameAction =
@@ -30,7 +43,10 @@ type GameAction =
   | { type: 'ASSIGN_CARD'; playerId: string }
   | { type: 'NEXT_ROUND' }
   | { type: 'RESET_GAME' }
-  | { type: 'END_GAME' };
+  | { type: 'END_GAME' }
+  | { type: 'SET_ROOM'; roomCode: string; isHost: boolean }
+  | { type: 'LEAVE_ROOM' }
+  | { type: 'SYNC_STATE'; syncState: SyncGameState };
 
 const initialState: GameState = {
   players: [],
@@ -41,6 +57,9 @@ const initialState: GameState = {
   votes: {},
   gameStarted: false,
   roundComplete: false,
+  roomCode: null,
+  isHost: false,
+  syncEnabled: false,
 };
 
 let playerIdCounter = 0;
@@ -90,7 +109,6 @@ function gameReducer(state: GameState, action: GameAction): GameState {
     case 'DRAW_CARD': {
       let { availableCards, usedCards } = state;
 
-      // If 70% of original bank used, generate new cards
       const usageThreshold = Math.floor(CARD_BANK.length * 0.7);
       if (usedCards.size >= usageThreshold && availableCards.length < 10) {
         const newCards: string[] = [];
@@ -157,9 +175,53 @@ function gameReducer(state: GameState, action: GameAction): GameState {
     case 'END_GAME':
       return { ...state, gameStarted: false };
 
+    case 'SET_ROOM':
+      return {
+        ...state,
+        roomCode: action.roomCode,
+        isHost: action.isHost,
+        syncEnabled: true,
+      };
+
+    case 'LEAVE_ROOM':
+      return {
+        ...state,
+        roomCode: null,
+        isHost: false,
+        syncEnabled: false,
+      };
+
+    case 'SYNC_STATE': {
+      const s = action.syncState;
+      return {
+        ...state,
+        players: s.players,
+        currentPlayerIndex: s.currentPlayerIndex,
+        usedCards: new Set(s.usedCardsList || []),
+        availableCards: s.availableCards || [],
+        currentCard: s.currentCard,
+        votes: s.votes || {},
+        gameStarted: s.gameStarted,
+        roundComplete: s.roundComplete,
+      };
+    }
+
     default:
       return state;
   }
+}
+
+function stateToSyncState(state: GameState): SyncGameState {
+  return {
+    players: state.players,
+    currentPlayerIndex: state.currentPlayerIndex,
+    usedCardsList: Array.from(state.usedCards),
+    availableCards: state.availableCards,
+    currentCard: state.currentCard,
+    votes: state.votes,
+    gameStarted: state.gameStarted,
+    roundComplete: state.roundComplete,
+  };
 }
 
 interface GameContextType {
@@ -167,12 +229,65 @@ interface GameContextType {
   dispatch: React.Dispatch<GameAction>;
   getMostVoted: () => { winners: Player[]; voteCount: number };
   allVoted: () => boolean;
+  createRoom: () => Promise<string>;
+  joinRoom: (code: string) => Promise<boolean>;
+  leaveRoom: () => Promise<void>;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
 export function GameProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(gameReducer, initialState);
+  const isFromSync = useRef(false);
+  const prevStateRef = useRef(state);
+
+  // Sync state to Firebase when it changes (host only)
+  useEffect(() => {
+    if (isFromSync.current) {
+      isFromSync.current = false;
+      prevStateRef.current = state;
+      return;
+    }
+
+    if (state.syncEnabled && state.isHost) {
+      const syncState = stateToSyncState(state);
+      syncService.syncState(syncState);
+    }
+
+    prevStateRef.current = state;
+  }, [state]);
+
+  const createRoom = useCallback(async (): Promise<string> => {
+    const code = await syncService.createRoom();
+    dispatch({ type: 'SET_ROOM', roomCode: code, isHost: true });
+
+    // Upload initial state
+    const syncState = stateToSyncState(state);
+    await syncService.syncState(syncState);
+
+    return code;
+  }, [state]);
+
+  const joinRoom = useCallback(async (code: string): Promise<boolean> => {
+    const success = await syncService.joinRoom(code.toUpperCase());
+    if (success) {
+      dispatch({ type: 'SET_ROOM', roomCode: code.toUpperCase(), isHost: false });
+
+      // Listen for state changes from host
+      syncService.listenToState((syncState) => {
+        isFromSync.current = true;
+        dispatch({ type: 'SYNC_STATE', syncState });
+      });
+
+      return true;
+    }
+    return false;
+  }, []);
+
+  const leaveRoom = useCallback(async () => {
+    await syncService.leaveRoom();
+    dispatch({ type: 'LEAVE_ROOM' });
+  }, []);
 
   const getMostVoted = (): { winners: Player[]; voteCount: number } => {
     const voteCounts: Record<string, number> = {};
@@ -198,7 +313,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <GameContext.Provider value={{ state, dispatch, getMostVoted, allVoted }}>
+    <GameContext.Provider
+      value={{ state, dispatch, getMostVoted, allVoted, createRoom, joinRoom, leaveRoom }}
+    >
       {children}
     </GameContext.Provider>
   );
